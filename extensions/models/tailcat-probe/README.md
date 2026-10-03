@@ -87,6 +87,33 @@ swamp model method run tailcat-heron transfer \
 swamp model method run tailcat-heron exec --input 'command=["uptime"]'
 ```
 
+## `transfer` and `exec` use your SSH config
+
+tailcat runs the system `ssh`/`scp` with a `ProxyCommand`, and offers no way to
+pass `-F` or `-i`. Your `~/.ssh/config` therefore applies, and a `Host *` block
+that sets `IdentityAgent` (a 1Password agent, say) wins over the `SSH_AUTH_SOCK`
+the runner passes. ssh uses the first value it finds, so an unattended probe
+signs through your desktop agent, or fails.
+
+tailcat names the ssh host `tailcat-<first 16 hex of sha256(address)>`. Put a
+block for that pattern **above** `Host *`:
+
+```
+Host tailcat-*
+    IdentityAgent SSH_AUTH_SOCK
+```
+
+## Back-to-back runs with the same client key
+
+tailcat refuses a new session from a saved client key for a short window after
+the previous session with that key closed. Measured against a local server, runs
+started ~1 s apart alternated between success and a 10 s
+`Dial: context deadline
+exceeded`; with 15 s between them, 4 of 4 succeeded.
+`perf` hides this with its own wait for a path. In a workflow that chains
+methods on one model, leave a gap between steps, or give each model its own
+client key.
+
 ## Requirements
 
 `tailcat` on PATH (or `tailcatBinary`), plus the system `scp`/`ssh` for
