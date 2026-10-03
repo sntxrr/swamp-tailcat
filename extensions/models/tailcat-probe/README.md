@@ -61,8 +61,12 @@ each version is a PUT and an index entry:
 | `transfer` | 7d       | 5           | file content                                         |
 | `exec`     | 7d       | 5           | stdout, unless `captureStdoutBytes` > 0 (max 64 KiB) |
 
-Each method writes to its own data name, so `data.latest(<model>, "ping")` is
-never ambiguous with another method's output.
+Each method writes under its own data name (`ping`, `perf`, `transfer`, `exec`),
+so `data.latest(<model>, "ping")` is never ambiguous with another method's
+output, and GC counts each method separately. Use one model per server.
+
+A `live` pre-flight check, `tailcat-binary-runs`, runs `tailcat version` before
+any method and stops the run if the binary is missing or broken.
 
 If you schedule a probe, cadence is the multiplier: `*/5` is 288 versions a day.
 Hourly or slower is plenty for reachability.

@@ -1,0 +1,82 @@
+{
+  "extension": "@sntxrr/tailcat-probe",
+  "version": "2026.10.03.1",
+  "reviewedAt": "2026-10-03T22:19:37Z",
+  "dimensions": [
+    {
+      "id": "credentials-secrets",
+      "verdict": "pass",
+      "note": "address is .meta({sensitive:true}); swamp refused it as a literal and required vault.get (verified). Redacted from stdout/stderr/stdoutHead; persisted only as a 12-hex SHA-256 fingerprint (smoke run: 0 occurrences in data, definitions, output, log). tailcat has no non-argv input for a client address, so it is visible in ps while a method runs; README requires targets to use --allow=<client-nodekey> and forbids serve no-auth-ssh. clientKey is a key name/path, not key material."
+    },
+    {
+      "id": "logging-quality",
+      "verdict": "pass",
+      "note": "Entry and completion info logs per method with structured placeholders; a unit test asserts the address never reaches a log."
+    },
+    {
+      "id": "error-handling",
+      "verdict": "pass",
+      "note": "Deliberate: tailcat failures (unreachable, refused, timeout) are written as ok:false with a redacted reason instead of thrown, because for a probe the failure is the measurement (same choice as @sntxrr/restic-repository scan). Invalid input is rejected by schema before any run; a missing binary fails the live pre-flight check with no data written (verified)."
+    },
+    {
+      "id": "testing-completeness",
+      "verdict": "pass",
+      "note": "27 unit tests exercise the real subprocess boundary with a fake tailcat and a schema-validating writeResource (own context, not createModelTestContext): success and failure paths, timeout kill, env isolation, redaction, data names, pre-flight check. Plus integration/: a hermetic Docker lab running real tailcat + derper, 10 cases over direct and relayed paths, 10/10."
+    },
+    {
+      "id": "idempotency-resilience",
+      "verdict": "pass",
+      "note": "Probes are read-only except transfer (overwrites its destination by design) and exec (runs the caller's command). No retries, so exec can never run a command twice. Timeouts SIGKILL the child and cancel pipe readers."
+    },
+    {
+      "id": "api-contracts",
+      "verdict": "pass",
+      "note": "No HTTP. Wraps the tailcat CLI (tested at b4dc28e): perf --json is parsed inside try/catch, ping lines by regex; unrecognised output yields ok:false with a reason. perf adds 500 ms to its path timeout to work around an upstream path-wait bug (tailscale/tailcat#144, fix proposed in #145)."
+    },
+    {
+      "id": "resource-management",
+      "verdict": "pass",
+      "note": "stdin is closed; child is killed and pipe readers cancelled on timeout; no temp files are created."
+    },
+    {
+      "id": "published-surface-hygiene",
+      "verdict": "pass",
+      "note": "README uses a fictional host (heron) and placeholders; test fixtures use RFC 5737 IPs and a fictional address. integration/ is not packaged. Safety warning 'uses Deno.Command' is inherent: the extension wraps a CLI."
+    },
+    {
+      "id": "schema-strictness",
+      "verdict": "pass",
+      "note": "Plain z.object everywhere, no passthrough."
+    },
+    {
+      "id": "lifetime-gc",
+      "verdict": "pass",
+      "note": "ping/transfer/exec 7d with 5 versions; perf 30d with 20. A unit test asserts no spec is infinite."
+    },
+    {
+      "id": "crud-completeness",
+      "verdict": "na",
+      "note": "Probe model, not a CRUD lifecycle: nothing is created, updated or deleted."
+    },
+    {
+      "id": "preflight-checks",
+      "verdict": "pass",
+      "note": "live check tailcat-binary-runs runs `tailcat version` before every method; verified to block a run on a missing binary."
+    },
+    {
+      "id": "instance-names",
+      "verdict": "pass",
+      "note": "Each method writes under its own spec name (ping/perf/transfer/exec); fixed in this review (all four had shared `target`), with a unit test that fails against the old code."
+    },
+    {
+      "id": "data-access",
+      "verdict": "na",
+      "note": "No method reads back stored state."
+    },
+    {
+      "id": "version-upgrades",
+      "verdict": "na",
+      "note": "Initial version; no previous schema to migrate."
+    }
+  ]
+}
