@@ -1,0 +1,94 @@
+# Hermetic integration lab for @sntxrr/tailcat-probe.
+#
+#   probe ── direct ── srv-direct          a direct path is possible
+#     │
+#     └──── direct ── derper ── relay ── srv-relay
+#                                          no route probe <-> srv-relay:
+#                                          every packet goes through the relay
+#
+# Both networks are internal: nothing reaches the internet or Tailscale's
+# public DERP servers. Run with integration/run.sh.
+
+name: tailcat-lab
+
+x-lab: &lab
+  image: tailcat-lab:local
+  volumes:
+    - shared:/shared
+  environment:
+    DERPMAP_URL: http://derpmap:8080/derpmap.json
+
+services:
+  setup:
+    <<: *lab
+    build:
+      context: ..
+      dockerfile: integration/Dockerfile
+    command: ["sh", "integration/setup.sh"]
+    network_mode: none
+
+  derpmap:
+    image: busybox:1.37
+    command: ["httpd", "-f", "-p", "8080", "-h", "/srv"]
+    volumes:
+      - ./derpmap.json:/srv/derpmap.json:ro
+    networks: [direct, relay]
+
+  derper:
+    <<: *lab
+    command:
+      - derper
+      - -a=:443
+      - -http-port=-1
+      - -certmode=manual
+      - -certdir=/shared/derp-certs
+      - -hostname=derper
+      - -stun-port=3478
+    networks: [direct, relay]
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+
+  srv-direct:
+    <<: *lab
+    command: ["sh", "integration/server.sh", "direct"]
+    networks: [direct]
+    depends_on: &srv-deps
+      setup:
+        condition: service_completed_successfully
+      derper:
+        condition: service_started
+      derpmap:
+        condition: service_started
+    healthcheck: &srv-health
+      test: ["CMD", "test", "-s", "/shared/addr-direct"]
+      interval: 1s
+      retries: 60
+
+  srv-relay:
+    <<: *lab
+    command: ["sh", "integration/server.sh", "relay"]
+    networks: [relay]
+    depends_on: *srv-deps
+    healthcheck:
+      <<: *srv-health
+      test: ["CMD", "test", "-s", "/shared/addr-relay"]
+
+  probe:
+    <<: *lab
+    command: ["sh", "integration/runner.sh"]
+    networks: [direct]
+    depends_on:
+      srv-direct:
+        condition: service_healthy
+      srv-relay:
+        condition: service_healthy
+
+networks:
+  direct:
+    internal: true
+  relay:
+    internal: true
+
+volumes:
+  shared:

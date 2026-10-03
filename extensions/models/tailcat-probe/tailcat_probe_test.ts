@@ -286,6 +286,8 @@ Deno.test("perf passes --reverse for download and --interval=0", async () => {
     const failure = String(written[0].data.failure);
     assertStringIncludes(failure, "--json perf --udp --reverse");
     assertStringIncludes(failure, "--interval=0");
+    // Default 10 s path timeout, offset so tailcat can return a relayed path.
+    assertStringIncludes(failure, "--timeout=10500ms");
     assertEquals(written[0].data.ok, false);
   } finally {
     fake.cleanup();

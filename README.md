@@ -18,6 +18,18 @@ Two design rules run through everything here:
    methods. What the methods store is fixed-size — no samples, file bodies or
    command output — so a remote datastore stays cheap.
 
+## Integration tests
+
+`integration/run.sh` builds tailcat and Tailscale's `derper` from source, then
+runs the probe against real servers in a Docker lab on internal-only networks:
+one server the probe can reach directly, and one it can reach only through the
+lab's own DERP relay. Every key and address is minted per run and destroyed with
+the lab. Nothing touches the internet or Tailscale's public relays.
+
+```sh
+integration/run.sh   # exit 0 = all cases passed; the lab is always torn down
+```
+
 Model and vault instances are gitignored: an instance carries a live address.
 
 ## License

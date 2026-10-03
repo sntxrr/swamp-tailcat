@@ -629,7 +629,12 @@ export const model = {
             `--parallel=${args.parallel ?? 1}`,
             ...(args.bitrate ? [`--bitrate=${args.bitrate}`] : []),
             ...(args.viaDerp ? ["--via-derp"] : []),
-            `--timeout=${pathTimeout}s`,
+            // tailcat (b4dc28e) pings for a path about once a second and
+            // stops only when under 0.5 s remain. With a whole-second timeout
+            // the last check lands at ~1.0 s, sleeps past the deadline, and a
+            // relayed path fails as "no reply to pings". The extra 500 ms puts
+            // the last check inside that window.
+            `--timeout=${pathTimeout * 1000 + 500}ms`,
             "--interval=0",
             g.address,
           ],

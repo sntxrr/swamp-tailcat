@@ -1,0 +1,20 @@
+{
+  "Regions": {
+    "900": {
+      "RegionID": 900,
+      "RegionCode": "lab",
+      "RegionName": "Integration lab",
+      "Nodes": [
+        {
+          "Name": "900a",
+          "RegionID": 900,
+          "HostName": "derper",
+          "IPv6": "none",
+          "DERPPort": 443,
+          "STUNPort": 3478,
+          "InsecureForTests": true
+        }
+      ]
+    }
+  }
+}
