@@ -1,0 +1,26 @@
+# BEGIN swamp managed section - DO NOT EDIT
+
+# Runtime data (not needed in version control)
+.swamp/
+
+# Local extension sources (developer-specific, not shared)
+.swamp-sources.yaml
+
+# Claude Code configuration (managed by swamp)
+.claude/worktrees/
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/scheduled_tasks.json
+# END swamp managed section
+
+# Local model and vault instances. An instance carries a tailcat address, and
+# a tailcat address is a bearer credential: anyone holding it can connect. This
+# repo tracks extension *sources* only.
+# Leading slash anchors these to the repo root so they do NOT also match
+# extensions/models/ (the tracked extension sources).
+/models/
+/vaults/
+
+# .swamp.yaml carries the datastore block. Develop against a local filesystem
+# datastore; never point this repo at a shared S3 datastore.
+.swamp.yaml

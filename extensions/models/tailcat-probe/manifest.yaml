@@ -1,0 +1,25 @@
+manifestVersion: 1
+
+name: "@sntxrr/tailcat-probe"
+version: "2026.10.03.1"
+description: "Probe a tailcat server (netcat over Tailscale's data plane, no control plane): ping for reachability and direct-vs-DERP path, perf for throughput/RTT/jitter, transfer for a scp round-trip, exec for a remote command. Every result is a fixed-size summary — no per-second samples, file bodies or command output — so it is cheap on a remote datastore. The tailcat address is a bearer credential: it is a sensitive argument, redacted from captured output, and persisted only as a fingerprint. Long-running modes (serve, forward, socks, browse, recv) are refused."
+repository: "https://github.com/sntxrr/swamp-tailcat"
+
+paths:
+  base: manifest
+
+models:
+  - tailcat_probe.ts
+
+additionalFiles:
+  - README.md
+  - LICENSE.md
+
+labels:
+  - tailcat
+  - tailscale
+  - wireguard
+  - derp
+  - network
+  - probe
+  - throughput
