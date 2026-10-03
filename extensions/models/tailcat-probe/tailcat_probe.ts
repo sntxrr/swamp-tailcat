@@ -33,6 +33,7 @@ import { z } from "npm:zod@4";
  */
 const ALLOWED_SUBCOMMANDS = new Set(["ping", "perf", "cp", "ssh"]);
 
+/** How to invoke tailcat: which binary, client key, DERP map and time limit. */
 export interface TailcatRunOptions {
   binary?: string;
   /** Saved client key name or path, passed as `--key=`. */
@@ -41,6 +42,7 @@ export interface TailcatRunOptions {
   timeoutMs?: number;
 }
 
+/** Outcome of one tailcat run, with the address already redacted from both streams. */
 export interface TailcatResult {
   code: number;
   stdout: string;
@@ -189,6 +191,7 @@ export async function fingerprint(value: string): Promise<string> {
   return (await sha256Hex(new TextEncoder().encode(value))).slice(0, 12);
 }
 
+/** Lower-case hex SHA-256 of `bytes`. */
 export async function sha256Hex(bytes: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest(
     "SHA-256",
@@ -223,6 +226,7 @@ export function parseGoDurationMs(text: string): number | null {
   );
 }
 
+/** One `pong in … via …` line from `tailcat ping`, parsed. */
 export interface Pong {
   rttMs: number;
   direct: boolean;
@@ -313,6 +317,23 @@ export function summarisePerf(raw: PerfJson) {
   };
 }
 
+/**
+ * The first `maxBytes` bytes of already-redacted stdout. Cutting the redacted
+ * text (not the raw bytes) means the address can never reach the stored head.
+ * A cut through a multi-byte character decodes to U+FFFD.
+ */
+export function stdoutHeadOf(
+  redacted: string,
+  maxBytes: number,
+): { text: string | null; truncated: boolean } {
+  if (maxBytes <= 0) return { text: null, truncated: false };
+  const bytes = new TextEncoder().encode(redacted);
+  return {
+    text: new TextDecoder().decode(bytes.subarray(0, maxBytes)),
+    truncated: bytes.length > maxBytes,
+  };
+}
+
 /** Last `max` characters of a stream — enough to see why it failed. */
 function tail(text: string, max = 500): string | null {
   const trimmed = text.trim();
@@ -351,7 +372,7 @@ const NotAFlag = z.string().min(1).regex(/^[^-\s]\S*$/, {
 
 const GlobalArgsSchema = z.object({
   target: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/).describe(
-    "Non-secret label for the server, used as the resource instance name.",
+    "Non-secret label for the server, recorded in every result.",
   ),
   address: NotAFlag.meta({ sensitive: true }).describe(
     "The tailcat address (tc…) or a DNS name with a tailcat= TXT record. " +
@@ -435,7 +456,12 @@ const ExecSchema = z.object({
   stdoutBytes: z.number().int(),
   stdoutSha256: z.string(),
   stdoutHead: z.string().nullable().describe(
-    "First captureStdoutBytes of stdout, only when explicitly requested.",
+    "First captureStdoutBytes bytes of stdout (address redacted), only when " +
+      "explicitly requested; null otherwise.",
+  ),
+  stdoutTruncated: z.boolean().describe(
+    "True when stdoutHead holds less than all of stdout. False when it is " +
+      "complete or was not captured.",
   ),
 });
 
@@ -528,6 +554,10 @@ async function fileDigest(
 // Model
 // ---------------------------------------------------------------------------
 
+/**
+ * `@sntxrr/tailcat/probe`: ping, perf, transfer and exec probes of one
+ * tailcat server, each written as a fixed-size summary under its own data name.
+ */
 export const model = {
   type: "@sntxrr/tailcat/probe",
   version: "2026.10.03.1",
@@ -565,6 +595,44 @@ export const model = {
     },
   },
 
+  checks: {
+    "tailcat-binary-runs": {
+      description:
+        "The tailcat binary must start and print its version. Fails fast " +
+        "when it is missing or not executable, before any method can touch " +
+        "a server.",
+      labels: ["live"],
+      execute: async (
+        context: { globalArgs: GlobalArgs },
+      ): Promise<{ pass: boolean; errors?: string[] }> => {
+        const binary = context.globalArgs.tailcatBinary ?? "tailcat";
+        try {
+          const out = await new Deno.Command(binary, {
+            args: ["version"],
+            env: { PATH: Deno.env.get("PATH") ?? "/usr/bin:/bin" },
+            clearEnv: true,
+            stdin: "null",
+            stdout: "piped",
+            stderr: "piped",
+            signal: AbortSignal.timeout(10_000),
+          }).output();
+          if (out.code !== 0) {
+            return {
+              pass: false,
+              errors: [`${binary} version exited ${out.code}`],
+            };
+          }
+          return { pass: true };
+        } catch (error) {
+          return {
+            pass: false,
+            errors: [`cannot run ${binary}: ${(error as Error).message}`],
+          };
+        }
+      },
+    },
+  },
+
   methods: {
     "ping": {
       description:
@@ -577,6 +645,10 @@ export const model = {
         context: ExecuteContext<GlobalArgs>,
       ): Promise<Handles> => {
         const g = context.globalArgs;
+        context.logger.info("Running {method} against {target}", {
+          method: "ping",
+          target: g.target,
+        });
         const timeout = args.timeoutSeconds ?? 10;
         const run = await runTailcat(
           g.address,
@@ -591,13 +663,18 @@ export const model = {
         );
         const pongs = parsePongs(run.stdout);
         const last = pongs.at(-1);
-        const handle = await context.writeResource("ping", g.target, {
+        const handle = await context.writeResource("ping", "ping", {
           ...(await commonOf(g, run)),
           direct: last?.direct ?? null,
           endpoint: last?.endpoint ?? null,
           derpRegion: last?.derpRegion ?? null,
           rttMs: last?.rttMs ?? null,
           pongs: pongs.length,
+        });
+        context.logger.info("Recorded {method} for {target}: ok={ok}", {
+          method: "ping",
+          target: g.target,
+          ok: run.code === 0,
         });
         return { dataHandles: [handle] };
       },
@@ -614,6 +691,10 @@ export const model = {
         context: ExecuteContext<GlobalArgs>,
       ): Promise<Handles> => {
         const g = context.globalArgs;
+        context.logger.info("Running {method} against {target}", {
+          method: "perf",
+          target: g.target,
+        });
         const seconds = args.seconds ?? 10;
         const pathTimeout = args.pathTimeoutSeconds ?? 10;
         const direction = args.direction ?? "upload";
@@ -653,7 +734,7 @@ export const model = {
           }
         }
         const common = await commonOf(g, run);
-        const handle = await context.writeResource("perf", g.target, {
+        const handle = await context.writeResource("perf", "perf", {
           ...common,
           ok: common.ok && summary !== null,
           failure: common.failure ?? parseError,
@@ -674,6 +755,11 @@ export const model = {
           jitterMs: summary?.jitterMs ?? null,
           reordered: summary?.reordered ?? null,
         });
+        context.logger.info("Recorded {method} for {target}: ok={ok}", {
+          method: "perf",
+          target: g.target,
+          ok: run.code === 0 && summary !== null,
+        });
         return { dataHandles: [handle] };
       },
     },
@@ -689,6 +775,10 @@ export const model = {
         context: ExecuteContext<GlobalArgs>,
       ): Promise<Handles> => {
         const g = context.globalArgs;
+        context.logger.info("Running {method} against {target}", {
+          method: "transfer",
+          target: g.target,
+        });
         const remotePath = args.remotePath ?? "";
         const maxHashBytes = args.maxHashBytes ?? 1_073_741_824;
         const remote = `${g.address}:${remotePath}`;
@@ -711,13 +801,18 @@ export const model = {
             ? await fileDigest(args.localPath, maxHashBytes)
             : { bytes: null, sha256: null });
 
-        const handle = await context.writeResource("transfer", g.target, {
+        const handle = await context.writeResource("transfer", "transfer", {
           ...(await commonOf(g, run)),
           direction: args.direction,
           localPath: args.localPath,
           remotePath,
           bytes: digest.bytes,
           sha256: digest.sha256,
+        });
+        context.logger.info("Recorded {method} for {target}: ok={ok}", {
+          method: "transfer",
+          target: g.target,
+          ok: run.code === 0,
         });
         return { dataHandles: [handle] };
       },
@@ -734,6 +829,10 @@ export const model = {
         context: ExecuteContext<GlobalArgs>,
       ): Promise<Handles> => {
         const g = context.globalArgs;
+        context.logger.info("Running {method} against {target}", {
+          method: "exec",
+          target: g.target,
+        });
         const capture = args.captureStdoutBytes ?? 0;
         const run = await runTailcat(
           g.address,
@@ -745,13 +844,20 @@ export const model = {
           ],
           runOptionsOf(g),
         );
-        const handle = await context.writeResource("exec", g.target, {
+        const head = stdoutHeadOf(run.stdout, capture);
+        const handle = await context.writeResource("exec", "exec", {
           ...(await commonOf(g, run)),
           command: args.command,
           exitCode: run.code,
           stdoutBytes: run.stdoutBytes.length,
           stdoutSha256: await sha256Hex(run.stdoutBytes),
-          stdoutHead: capture > 0 ? run.stdout.slice(0, capture) : null,
+          stdoutHead: head.text,
+          stdoutTruncated: head.truncated,
+        });
+        context.logger.info("Recorded {method} for {target}: ok={ok}", {
+          method: "exec",
+          target: g.target,
+          ok: run.code === 0,
         });
         return { dataHandles: [handle] };
       },

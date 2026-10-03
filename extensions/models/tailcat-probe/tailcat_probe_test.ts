@@ -12,6 +12,7 @@ import {
   parsePongs,
   redactAddress,
   runTailcat,
+  stdoutHeadOf,
   summarisePerf,
 } from "./tailcat_probe.ts";
 
@@ -45,12 +46,16 @@ interface Written {
 /** writeResource VALIDATES against the real schema; a recorder hides bugs. */
 function makeContext(
   globalArgs: Record<string, unknown>,
-): { context: never; written: Written[] } {
+): { context: never; written: Written[]; logs: string[] } {
   const written: Written[] = [];
+  const logs: string[] = [];
   const resources = model.resources as Record<string, { schema: z.ZodType }>;
   const context = {
     globalArgs,
-    logger: { info: () => {}, warn: () => {} },
+    logger: {
+      info: (m: string, p?: unknown) => logs.push(m + JSON.stringify(p ?? {})),
+      warn: (m: string, p?: unknown) => logs.push(m + JSON.stringify(p ?? {})),
+    },
     writeResource(
       spec: string,
       instance: string,
@@ -69,7 +74,7 @@ function makeContext(
       return Promise.resolve({ name: instance });
     },
   };
-  return { context: context as never, written };
+  return { context: context as never, written, logs };
 }
 
 // deno-lint-ignore no-explicit-any
@@ -231,7 +236,7 @@ Deno.test("ping records a direct path", async () => {
     const { context, written } = makeContext(globalsFor(fake.path));
     await methods.ping.execute({}, context);
     assertEquals(written.length, 1);
-    assertEquals(written[0].instance, "heron");
+    assertEquals(written[0].instance, "ping");
     assertEquals(written[0].data.ok, true);
     assertEquals(written[0].data.direct, true);
     assertEquals(written[0].data.rttMs, 1.2);
@@ -332,6 +337,8 @@ Deno.test("exec stores hash only unless capture is requested", async () => {
     assertEquals(written[0].data.ok, false);
     assertEquals(written[0].data.stdoutHead, null);
     assertEquals(written[1].data.stdoutHead, "hello");
+    assertEquals(written[1].data.stdoutTruncated, true);
+    assertEquals(written[0].data.stdoutTruncated, false);
     assertNoAddress(written);
   } finally {
     fake.cleanup();
@@ -346,4 +353,76 @@ Deno.test("every resource sets lifetime and garbageCollection", () => {
     );
     assert(spec.garbageCollection > 0, `${name} has no GC`);
   }
+});
+
+Deno.test("each method writes its own data name, so data.latest is unambiguous", async () => {
+  // A shared instance name (e.g. the target) would make every method a new
+  // version of one data item, and mix their GC counts.
+  const fake = await fakeTailcat(
+    'case "$1" in ping) echo "pong in 1ms via 203.0.113.7:41641";; ' +
+      '--json) echo \'{"path":{"direct":true,"rtt":1},"params":{"proto":"tcp","dir":"up","streams":1}}\';; ' +
+      'cp) for a; do last="$a"; done; printf x > "$last";; *) echo hi;; esac',
+  );
+  const dir = await Deno.makeTempDir();
+  try {
+    const { context, written, logs } = makeContext(globalsFor(fake.path));
+    await methods.ping.execute({}, context);
+    await methods.perf.execute({}, context);
+    await methods.transfer.execute(
+      { direction: "receive", localPath: `${dir}/x`, remotePath: "x" },
+      context,
+    );
+    await methods.exec.execute({ command: ["true"] }, context);
+    assertEquals(
+      written.map((w) => `${w.spec}/${w.instance}`),
+      ["ping/ping", "perf/perf", "transfer/transfer", "exec/exec"],
+    );
+    assertEquals(logs.length, 8, "entry + completion log per method");
+    assert(!logs.join("\n").includes(ADDRESS), "address leaked into a log");
+  } finally {
+    fake.cleanup();
+    Deno.removeSync(dir, { recursive: true });
+  }
+});
+
+// deno-lint-ignore no-explicit-any
+const checks = model.checks as any;
+
+Deno.test("pre-flight check passes when tailcat runs", async () => {
+  const fake = await fakeTailcat('[ "$1" = version ] && echo v0.0.0-test');
+  try {
+    const result = await checks["tailcat-binary-runs"].execute({
+      globalArgs: globalsFor(fake.path),
+    });
+    assertEquals(result, { pass: true });
+  } finally {
+    fake.cleanup();
+  }
+});
+
+Deno.test("pre-flight check fails on a missing or broken binary", async () => {
+  const missing = await checks["tailcat-binary-runs"].execute({
+    globalArgs: globalsFor("/nonexistent/tailcat"),
+  });
+  assertEquals(missing.pass, false);
+  assertStringIncludes(missing.errors[0], "cannot run /nonexistent/tailcat");
+
+  const fake = await fakeTailcat("exit 2");
+  try {
+    const broken = await checks["tailcat-binary-runs"].execute({
+      globalArgs: globalsFor(fake.path),
+    });
+    assertEquals(broken.pass, false);
+    assertStringIncludes(broken.errors[0], "exited 2");
+  } finally {
+    fake.cleanup();
+  }
+});
+
+Deno.test("stdoutHeadOf cuts by bytes, flags truncation, never exposes the raw address", () => {
+  assertEquals(stdoutHeadOf("héllo", 2), { text: "h\uFFFD", truncated: true });
+  assertEquals(stdoutHeadOf("hi", 64), { text: "hi", truncated: false });
+  assertEquals(stdoutHeadOf("hi", 0), { text: null, truncated: false });
+  const redacted = redactAddress(`token ${ADDRESS} end`, ADDRESS);
+  assert(!String(stdoutHeadOf(redacted, 64).text).includes(ADDRESS));
 });
